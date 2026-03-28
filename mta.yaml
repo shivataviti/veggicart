@@ -1,0 +1,130 @@
+_schema-version: 3.3.0
+ID: vegi-cart
+description: A simple CAP project.
+version: 1.0.0
+
+modules:
+  - name: vegi-cart-srv
+    type: nodejs
+    path: gen/srv
+    requires:
+      - name: vegi-cart-auth
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}
+    parameters:
+      buildpack: nodejs_buildpack
+      instances: 1
+    build-parameters:
+      builder: npm-ci
+
+  - name: vegi-cart-app-content
+    type: com.sap.application.content
+    path: .
+    requires:
+      - name: vegi-cart-repo-host
+        parameters:
+          content-target: true
+    build-parameters:
+      build-result: resources
+      requires:
+        - artifacts:
+            - vegicart.zip
+          name: vegicart
+          target-path: resources/
+
+  - name: vegicart
+    type: html5
+    path: app/vegicart
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npm install
+        - npm run build:cf
+      supported-platforms: []
+
+  - name: vegi-cart-approuter
+    type: approuter.nodejs
+    path: app/router
+    parameters:
+      keep-existing-routes: true
+      disk-quota: 256M
+      memory: 256M
+    requires:
+      - name: srv-api
+        group: destinations
+        properties:
+          name: srv-api
+          url: ~{srv-url}
+          forwardAuthToken: true
+      - name: vegi-cart-auth
+      - name: vegi-cart-repo-runtime
+    provides:
+      - name: app-api
+        properties:
+          app-protocol: ${protocol}
+          app-uri: ${default-uri}
+
+resources:
+  - name: vegi-cart-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      config:
+        oauth2-configuration:
+          credential-types:
+            - binding-secret
+            - x509
+          redirect-uris:
+            - https://*~{app-api/app-uri}/**
+        tenant-mode: dedicated
+        xsappname: vegi-cart-${org}-${space}
+      path: ./xs-security.json
+      service: xsuaa
+      service-plan: application
+    requires:
+      - name: app-api   # ✅ THIS IS THE MISSING FIX
+
+  - name: vegi-cart-repo-runtime
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-runtime
+
+  - name: vegi-cart-repo-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-name: vegi-cart-html5-service
+      service-plan: app-host
+
+  - name: vegi-cart-destination-service
+    type: org.cloudfoundry.managed-service
+    parameters:
+      config:
+        HTML5Runtime_enabled: false
+        init_data:
+          instance:
+            destinations:
+              - Authentication: NoAuthentication
+                Name: ui5
+                ProxyType: Internet
+                Type: HTTP
+                URL: https://ui5.sap.com
+            existing_destinations_policy: update
+        version: 1.0.0
+      service: destination
+      service-name: vegi-cart-destination-service
+      service-plan: lite
+
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx cds build --production
